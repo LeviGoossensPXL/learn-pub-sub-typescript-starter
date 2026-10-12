@@ -1,7 +1,7 @@
 import amqp from "amqplib";
 import { clientWelcome, commandStatus, getInput, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { declareAndBind, SimpleQueueType, subscribeJSON } from "../internal/pubsub/consume.js";
-import { ExchangePerilDirect, ExchangePerilTopic, PauseKey, WarRecognitionsPrefix } from "../internal/routing/routing.js";
+import { ExchangePerilDirect, ExchangePerilTopic, PauseKey, WarRecognitionsPrefix, ArmyMovesPrefix } from "../internal/routing/routing.js";
 import { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
 import { commandMove } from "../internal/gamelogic/move.js";
@@ -14,24 +14,19 @@ async function main() {
   const conn = await amqp.connect(connString);
   console.log("Connnection was succesful.");
 
-  const channel = await conn.createConfirmChannel();
+  const confirmChannel = await conn.createConfirmChannel();
 
   let username = await clientWelcome();
-  declareAndBind(conn, ExchangePerilDirect, 'pause.' + username, PauseKey, SimpleQueueType.Transient);
-  declareAndBind(conn, ExchangePerilTopic, 'army_moves.' + username, "army_moves.*", SimpleQueueType.Transient);
-
-  declareAndBind(conn, ExchangePerilTopic,  "war", WarRecognitionsPrefix + ".*", SimpleQueueType.Durable);
-
   let myGameState = new GameState(username);
 
-  subscribeJSON(conn, ExchangePerilDirect, 'pause.' + username, PauseKey, SimpleQueueType.Transient, handlerPause(myGameState));
-  subscribeJSON(conn, ExchangePerilTopic, 'army_moves.'+ username, "army_moves.*", SimpleQueueType.Transient, handlerMove(myGameState, channel));
+  await subscribeJSON(conn, ExchangePerilDirect, PauseKey + "." + username, PauseKey, SimpleQueueType.Transient, handlerPause(myGameState));
+  await subscribeJSON(conn, ExchangePerilTopic, ArmyMovesPrefix + "." + username, ArmyMovesPrefix + ".*", SimpleQueueType.Transient, handlerMove(myGameState, confirmChannel));
 
-  subscribeJSON(conn, ExchangePerilTopic, "war", WarRecognitionsPrefix + ".*", SimpleQueueType.Durable, handlerWar(myGameState));
+  await subscribeJSON(conn, ExchangePerilTopic, WarRecognitionsPrefix, WarRecognitionsPrefix + ".*", SimpleQueueType.Durable, handlerWar(myGameState));
 
 
   while (true) {
-      const input = await getInput();
+    const input = await getInput();
       const first_word = input[0];
 
       if (first_word === "spawn") {
@@ -46,19 +41,19 @@ async function main() {
         console.log("Sending a move message");
         try {
           const am = commandMove(myGameState, input);
-          await publishJSON(channel, ExchangePerilTopic, 'army_moves.' + username, am);
-        } catch (error) {
-          console.error(error);
-        }
+          await publishJSON(confirmChannel, ExchangePerilTopic, ArmyMovesPrefix + "." + username, am);
+      } catch (error) {
+        console.error(error);
       }
-      else if (first_word === "status") {
+    }
+    else if (first_word === "status") {
         commandStatus(myGameState);
-      }
-      else if (first_word === "help") {
-        printClientHelp();
-      }
-      else if (first_word === "spam") {
-        console.log("Spamming not allowed yet!");
+    }
+    else if (first_word === "help") {
+      printClientHelp();
+    }
+    else if (first_word === "spam") {
+      console.log("Spamming not allowed yet!");
       }
       else if (first_word === "quit") {
         console.log("We are quiting. Breaking out of loop.");

@@ -1,4 +1,4 @@
-import type { ConfirmChannel } from "amqplib";
+import type { Channel, ConfirmChannel } from "amqplib";
 import type { ArmyMove, RecognitionOfWar } from "../internal/gamelogic/gamedata.js";
 import type { GameState, PlayingState } from "../internal/gamelogic/gamestate.js";
 import { handleMove, MoveOutcome } from "../internal/gamelogic/move.js";
@@ -9,56 +9,64 @@ import { ExchangePerilTopic, WarRecognitionsPrefix } from "../internal/routing/r
 import { handleWar, WarOutcome } from "../internal/gamelogic/war.js";
 
 export function handlerPause(gs: GameState): (ps: PlayingState) => AckType{
-    return (ps: PlayingState): AckType => {
-        handlePause(gs, ps);
-        process.stdout.write("> ");
-        return AckType.Ack;
-    }
+  return (ps: PlayingState): AckType => {
+    handlePause(gs, ps);
+    process.stdout.write("> ");
+    return AckType.Ack;
+  }
 }
 
-export function handlerMove(gs: GameState, cc: ConfirmChannel): (am: ArmyMove) => AckType {
-    return (am: ArmyMove): AckType => {
-        try {
-            const outcome = handleMove(gs, am);
-            switch (outcome) {
-                case MoveOutcome.Safe:
-                    AckType.Ack;
-                case MoveOutcome.MakeWar:
-                    const rw: RecognitionOfWar = {
-                        attacker: am.player,
-                        defender: gs.getPlayerSnap(),
-                    };
-                    publishJSON(cc, ExchangePerilTopic, WarRecognitionsPrefix + "." + gs.getUsername, rw)
-                    return AckType.NackRequeue;
-                default:
-                    return AckType.NackDiscard;
-            }
-        } finally {
-            process.stdout.write("> ");
-        }
-    };
-}
+export function handlerMove(gs: GameState, cc: ConfirmChannel): (am: ArmyMove) => Promise<AckType> {
+  return async (am: ArmyMove): Promise<AckType> => {
+    try {
+      const outcome = handleMove(gs, am);
+      switch (outcome) {
+        case MoveOutcome.Safe:
+        case MoveOutcome.SamePlayer:
+          return AckType.Ack;
+        case MoveOutcome.MakeWar:
+            const rw: RecognitionOfWar = {
+                attacker: am.player,
+                defender: gs.getPlayerSnap(),
+            };
 
-export function handlerWar(gs: GameState): (rw: RecognitionOfWar) => AckType {
-    return (rw: RecognitionOfWar): AckType => {
-        const warResolution = handleWar(gs, rw);
-        process.stdout.write("> ");
-        switch (warResolution.result) {
-            case WarOutcome.NotInvolved:
+            try {
+                await publishJSON(cc, ExchangePerilTopic, WarRecognitionsPrefix + "." + gs.getUsername, rw);
+            } catch (err) {
+                console.error("Error publishing war recognition:", err);
+            } finally {
                 return AckType.NackRequeue;
-            case WarOutcome.NoUnits:
-                return AckType.NackDiscard;
-            case WarOutcome.OpponentWon:
-                return AckType.Ack;
-            case WarOutcome.YouWon:
-                return AckType.Ack;
-            case WarOutcome.Draw:
-                return AckType.Ack;
-        
-            default:
-                console.error("war resolution not reached.")
-                return AckType.NackDiscard;
+            }
+        default:
+            return AckType.NackDiscard;
         }
-
+    } finally {
+        process.stdout.write("> ");
     }
+  };
+}
+
+export function handlerWar(gs: GameState): (rw: RecognitionOfWar) => Promise<AckType> {
+  return async (rw: RecognitionOfWar): Promise<AckType> => {
+    try {
+      const outcome = handleWar(gs, rw);
+
+      switch (outcome.result) {
+        case WarOutcome.NotInvolved:
+          return AckType.NackRequeue;
+        case WarOutcome.NoUnits:
+          return AckType.NackDiscard;
+        case WarOutcome.YouWon:
+        case WarOutcome.OpponentWon:
+        case WarOutcome.Draw:
+          return AckType.Ack;
+
+        default:
+          console.error("Unexpected war resolution");
+          return AckType.NackDiscard;
+      }
+    } finally {
+      process.stdout.write("> ");
+    }
+  }
 }

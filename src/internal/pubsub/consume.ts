@@ -18,7 +18,7 @@ export async function declareAndBind(
   key: string,
   queueType: SimpleQueueType,
 ): Promise<[Channel, amqp.Replies.AssertQueue]> {
-    const channel = await conn.createChannel();
+    const ch = await conn.createChannel();
 
     let options: amqp.Options.AssertQueue | undefined;
     if (queueType === SimpleQueueType.Durable) {
@@ -28,10 +28,10 @@ export async function declareAndBind(
         options = {autoDelete: true, exclusive: true, arguments: { "x-dead-letter-exchange": "peril_dlx" }};
     }
 
-    const queue = await channel.assertQueue(queueName, options);
-    await channel.bindQueue(queueName, exchange, key);
+    const queue = await ch.assertQueue(queueName, options);
+    await ch.bindQueue(queueName, exchange, key);
 
-    return [channel, queue];
+    return [ch, queue];
 };
 
 export async function subscribeJSON<T>(
@@ -42,32 +42,46 @@ export async function subscribeJSON<T>(
   queueType: SimpleQueueType,
   handler: (data: T) => Promise<AckType> | AckType,
 ): Promise<void> {
-    const channelAndQueue = await declareAndBind(conn, exchange, queueName, key, queueType);
-    await channelAndQueue[0].consume(channelAndQueue[1].queue, async (message: amqp.ConsumeMessage | null) => {
-        if (message === null) {
-            return;
-        }
+  const [ch, queue] = await declareAndBind(conn, exchange, queueName, key, queueType);
 
-        const jsonParsed = JSON.parse(message.content.toString());
-        const ackType = await handler(jsonParsed);
-        switch (ackType) {
-            case AckType.Ack:
-                channelAndQueue[0].ack(message);
-                console.log("ack");
-                break;
+  await ch.consume(queue.queue, async (message: amqp.ConsumeMessage | null) => {
+    if (message === null) {
+        return;
+    }
+    let jsonParsed;
+    try {
+      jsonParsed = JSON.parse(message.content.toString());
+    } catch (err) {
+      console.error("Could not unmarshal message:", err);
+      return;
+    }
 
-            case AckType.NackRequeue:
-                channelAndQueue[0].nack(message, false, true);
-                console.log("nack requeue");
-                break;
+    try {
+      const result = await handler(jsonParsed);
+      switch (result) {
+        case AckType.Ack:
+          ch.ack(message);
+          console.log("ack");
+          break;
 
-            case AckType.NackDiscard:
-                channelAndQueue[0].nack(message, false, false);
-                console.log("nack discard");
-                break;
-        
-            default:
-                break;
-        }
-    });
-};
+        case AckType.NackRequeue:
+          ch.nack(message, false, true);
+          console.log("nack requeue");
+          break;
+
+        case AckType.NackDiscard:
+          ch.nack(message, false, false);
+          console.log("nack discard");
+          break;
+
+        default:
+          console.error("Unexpected ack type:");
+          return;
+      }
+    } catch (err) {
+      console.error("Error handling message:", err);
+      ch.nack(message, false, false);
+      return;
+    }
+  });
+}
