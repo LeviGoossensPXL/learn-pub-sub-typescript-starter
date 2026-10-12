@@ -22,10 +22,10 @@ export async function declareAndBind(
 
     let options: amqp.Options.AssertQueue | undefined;
     if (queueType === SimpleQueueType.Durable) {
-        options = {durable: true};
+        options = {durable: true, arguments: { "x-dead-letter-exchange": "peril_dlx" }};
     }
     else if (queueType === SimpleQueueType.Transient) {
-        options = {autoDelete: true, exclusive: true};
+        options = {autoDelete: true, exclusive: true, arguments: { "x-dead-letter-exchange": "peril_dlx" }};
     }
 
     const queue = await channel.assertQueue(queueName, options);
