@@ -1,11 +1,13 @@
 import amqp from "amqplib";
 import { clientWelcome, commandStatus, getInput, printClientHelp, printQuit } from "../internal/gamelogic/gamelogic.js";
 import { declareAndBind, SimpleQueueType, subscribeJSON } from "../internal/pubsub/consume.js";
-import { ExchangePerilDirect, PauseKey } from "../internal/routing/routing.js";
+import { ExchangePerilDirect, ExchangePerilTopic, PauseKey } from "../internal/routing/routing.js";
 import { GameState } from "../internal/gamelogic/gamestate.js";
 import { commandSpawn } from "../internal/gamelogic/spawn.js";
-import { commandMove } from "../internal/gamelogic/move.js";
+import { commandMove, handleMove } from "../internal/gamelogic/move.js";
 import { handlerPause } from "./handlers.js";
+import { publishJSON } from "../internal/pubsub/publish.js";
+import type { ArmyMove } from "../internal/gamelogic/gamedata.js";
 
 async function main() {
   console.log("Starting Peril client...");
@@ -13,21 +15,26 @@ async function main() {
   const conn = await amqp.connect(connString);
   console.log("Connnection was succesful.");
 
+  const channel = await conn.createConfirmChannel();
+
   let username = await clientWelcome();
   declareAndBind(conn, ExchangePerilDirect, 'pause.' + username, PauseKey, SimpleQueueType.Transient);
+  declareAndBind(conn, ExchangePerilTopic, 'army_moves.' + username, "army_moves.*", SimpleQueueType.Transient);
 
   let myGameState = new GameState(username);
+
+  subscribeJSON(conn, ExchangePerilDirect, 'pause.' + username, PauseKey, SimpleQueueType.Transient, handlerPause(myGameState));
+  subscribeJSON(conn, ExchangePerilTopic, 'army_moves.'+ username, "army_moves.*", SimpleQueueType.Transient, (am: ArmyMove) => handleMove(myGameState, am));
+
 
   while (true) {
       const input = await getInput();
       const first_word = input[0];
 
-      subscribeJSON(conn, ExchangePerilDirect, 'pause.' + username, PauseKey, SimpleQueueType.Transient, handlerPause(myGameState));
-
       if (first_word === "spawn") {
         console.log("Sending a spawn message");
         try {
-          commandSpawn(myGameState, input);          
+          commandSpawn(myGameState, input);
         } catch (error) {
           console.error(error);
         }
@@ -35,7 +42,8 @@ async function main() {
       else if (first_word === "move") {
         console.log("Sending a move message");
         try {
-          commandMove(myGameState, input);          
+          const am = commandMove(myGameState, input);
+          await publishJSON(channel, ExchangePerilTopic, 'army_moves.' + username, am);
         } catch (error) {
           console.error(error);
         }
