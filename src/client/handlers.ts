@@ -31,7 +31,7 @@ export function handlerMove(gs: GameState, cc: ConfirmChannel): (am: ArmyMove) =
             };
 
             try {
-                await publishJSON(cc, ExchangePerilTopic, WarRecognitionsPrefix + "." + gs.getUsername, rw);
+                await publishJSON(cc, ExchangePerilTopic, WarRecognitionsPrefix + "." + gs.getUsername(), rw);
             } catch (err) {
                 console.error("Error publishing war recognition:", err);
             } finally {
