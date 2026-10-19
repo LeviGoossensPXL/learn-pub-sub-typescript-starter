@@ -21,9 +21,6 @@ export function handlerMove(gs: GameState, cc: ConfirmChannel): (am: ArmyMove) =
     try {
       const outcome = handleMove(gs, am);
       switch (outcome) {
-        case MoveOutcome.Safe:
-        case MoveOutcome.SamePlayer:
-          return AckType.Ack;
         case MoveOutcome.MakeWar:
             const rw: RecognitionOfWar = {
                 attacker: am.player,
@@ -31,14 +28,16 @@ export function handlerMove(gs: GameState, cc: ConfirmChannel): (am: ArmyMove) =
             };
 
             try {
-                await publishJSON(cc, ExchangePerilTopic, WarRecognitionsPrefix + "." + gs.getUsername(), rw);
+                const ack = await publishJSON(cc, ExchangePerilTopic, WarRecognitionsPrefix + "." + gs.getUsername(), rw);
             } catch (err) {
                 console.error("Error publishing war recognition:", err);
-            } finally {
                 return AckType.NackRequeue;
             }
+            return AckType.Ack;
+        case MoveOutcome.Safe:
+        case MoveOutcome.SamePlayer:
         default:
-            return AckType.NackDiscard;
+            return AckType.Ack;
         }
     } finally {
         process.stdout.write("> ");
